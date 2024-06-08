@@ -4,8 +4,10 @@ const http = require('http');
 const getUserDetailsFromToken = require('../helpers/getUserDetailsFromToken');
 const UserModel = require('../models/userModel');
 const { ConversationModel, MessageModel } = require('../models/ConversationModel');
+const { GroupModel } = require('../models/Group')
 const getConversation = require('../helpers/getConversation');
 const client = require('../redis/redis');
+const createGroupMessage = require('../helpers/getGroupMessages.js');
 
 const app = express();
 const server = http.createServer(app);
@@ -41,7 +43,7 @@ io.on('connection', async (socket) => {
             if (userDetails) {
                 userDetails = JSON.parse(userDetails);
             } else {
-                userDetails = await UserModel.findById(userId).select("-password");
+                userDetails = await UserModel.findById(userId)
                 if (userDetails) {
                     await client.set(cacheKey, JSON.stringify(userDetails), 'EX', 86400);
                 }
@@ -198,7 +200,9 @@ io.on('connection', async (socket) => {
             }
 
             socket.emit('conversation', conversation);
+
         });
+
 
         socket.on('seen', async (msgByUserId) => {
             let conversation = await ConversationModel.findOne({
@@ -223,6 +227,107 @@ io.on('connection', async (socket) => {
 
             io.to(user?._id?.toString()).emit('conversation', conversationSender);
             io.to(msgByUserId).emit('conversation', conversationReceiver);
+        });
+
+
+
+        // Group chat handlers
+
+        socket.on('create-group', async (groupData) => {
+            try {
+                const group = new GroupModel({
+                    name: groupData.name,
+                    members: groupData.members,
+                    profilePic: groupData.profilePic
+                });
+
+                const savedGroup = await group.save();
+
+                // Emit a 'group-created' event to inform connected clients about the new group
+                io.emit('group-created', savedGroup);
+
+
+            } catch (error) {
+                console.error('Error creating group:', error);
+            }
+        });
+
+        socket.on('grp', async (currentUserId) => {
+            try {
+                if (!currentUserId) {
+                    throw new Error('Current user ID is missing');
+                }
+                // Fetch user groups
+                const userGroups = await GroupModel.find({ 'members': currentUserId })
+                    .populate('members', '-password')
+                    .populate('messages');
+                // Emit the user groups to the client
+                io?.to(currentUserId)?.emit('grps', userGroups);
+            } catch (error) {
+                console.error('Error fetching groups for user:', error);
+            }
+        });
+
+        socket.on('group-page', async (groupId) => {
+            const cacheKey = `group-details:${groupId}`;
+            let groupDetails = await client.get(cacheKey);
+
+            if (groupDetails) {
+                groupDetails = JSON.parse(groupDetails);
+            } else {
+                groupDetails = await GroupModel.findById(groupId).populate('members', '-password').populate('messages');
+                if (groupDetails) {
+                    await client.set(cacheKey, JSON.stringify(groupDetails), 'EX', 86400);
+                }
+            }
+            socket.emit('group-details', groupDetails);
+        });
+
+
+        socket.on('new group message', async (data) => {
+            try {
+
+                if (!data.groupId || !data.sender) {
+                    throw new Error('groupId and sender are required');
+                }
+
+                const group = await GroupModel.findById(data.groupId);
+                if (!group) {
+                    console.log('Group not found');
+                    return;
+                }
+
+                const savedMessage = await createGroupMessage({
+                    text: data.text,
+                    imageUrl: data.imageUrl,
+                    videoUrl: data.videoUrl,
+                    msgByUserId: data.sender
+                });
+
+                group.messages.push(savedMessage._id);
+                await group.save();
+
+                // Emit an event to inform clients about the new GroupMessage
+                io.to(data?.groupId).emit('group-message', savedMessage);
+
+                const groupCacheKey = `group-details:${data.groupId}`;
+                await client.del(groupCacheKey);
+
+                const updatedGroupDetails = await GroupModel.findById(data.groupId).populate('members', '-password').populate('messages');
+                await client.set(groupCacheKey, JSON.stringify(updatedGroupDetails), 'EX', 86400);
+
+            } catch (error) {
+                console.error('Error creating group message:', error);
+            }
+        });
+
+
+        socket.on('join-group', async (groupId) => {
+            socket.join(groupId);
+        });
+
+        socket.on('leave-group', async (groupId) => {
+            socket.leave(groupId);
         });
 
         socket.on('disconnect', () => {

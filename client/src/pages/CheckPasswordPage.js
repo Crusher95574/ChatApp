@@ -20,7 +20,7 @@ const CheckPasswordPage = () => {
       navigate('/email')
     }
   }, [])
-const handleOnChange = (e) => {
+  const handleOnChange = (e) => {
     const { name, value } = e.target
 
     setData((preve) => {

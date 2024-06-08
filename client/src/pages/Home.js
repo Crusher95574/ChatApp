@@ -1,18 +1,19 @@
-// Home.js
+// pages/Home.js
 import axios from 'axios';
 import React, { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { logout, setOnlineUser, setSocketConnection, setUser } from '../redux/userSlice';
+import { logout, setOnlineUser, setUser } from '../redux/userSlice';
 import Sidebar from '../components/Sidebar';
 import logo from '../assets/logo.png';
-import io from 'socket.io-client';
+import { useSocket } from '../context/SocketContext';
 
 const Home = () => {
   const user = useSelector(state => state.user);
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const location = useLocation();
+  const socket = useSocket();
 
   const fetchUserDetails = async () => {
     try {
@@ -29,7 +30,6 @@ const Home = () => {
         navigate("/email");
       }
     } catch (error) {
-      // Handle error gracefully
       console.error("Error fetching user details:", error);
     }
   };
@@ -39,24 +39,18 @@ const Home = () => {
   }, []);
 
   useEffect(() => {
-    const socketConnection = io(process.env.REACT_APP_BACKEND_URL, {
-      auth: {
-        token: localStorage.getItem('token')
-      },
-    });
-    socketConnection.on('onlineUser', (data) => {
-      dispatch(setOnlineUser(data));
-    });
+    if (socket) {
+      socket.on('onlineUser', (data) => {
+        dispatch(setOnlineUser(data));
+      });
 
-    dispatch(setSocketConnection(socketConnection)); // Dispatch the entire socketConnection object
-
-    return () => {
-      // Disconnect socket only if it's connected
-      if (socketConnection.connected) {
-        socketConnection.disconnect();
-      }
-    };
-  }, [dispatch]);
+      return () => {
+        if (socket.connected) {
+          socket.disconnect();
+        }
+      };
+    }
+  }, [dispatch, socket]);
 
   const basePath = location.pathname === '/';
 

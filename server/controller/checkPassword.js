@@ -16,10 +16,12 @@ async function checkPassword(req, res) {
         if (cachedUserDetails) {
             // If user details exist, parse them from the cache
             user = JSON.parse(cachedUserDetails);
+       
         } else {
             // If user details don't exist in the cache, fetch them from the database
             user = await UserModel.findById(userId);
             if (!user) {
+                console.error("User not found in the database");
                 return res.status(400).json({
                     message: "User not found",
                     error: true,
@@ -31,12 +33,22 @@ async function checkPassword(req, res) {
 
             // Store user details in the cache as a string
             await client.set(cacheKey, JSON.stringify(userDetails), 'EX', 86400); // 1 day expiration
+           
         }
 
         // Verify the password
+        if (!user || !user.password) {
+            console.error("User document or password field is undefined");
+            return res.status(400).json({
+                message: "Invalid user data",
+                error: true,
+            });
+        }
+
         const verifyPassword = await bcryptjs.compare(password, user.password);
 
         if (!verifyPassword) {
+            console.error("Password verification failed");
             return res.status(400).json({
                 message: "Wrong password",
                 error: true,

@@ -1,13 +1,18 @@
+// App.js
+import React from 'react';
+import { Outlet } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import './App.css';
-import {Outlet} from 'react-router-dom';
+import { SocketProvider } from './context/SocketContext';
+
 function App() {
   return (
     <>
-    <Toaster/>
-    <main>
-      <Outlet/>
-    </main>
+      <Toaster />
+      <SocketProvider>
+        <main>
+          <Outlet />
+        </main>
+      </SocketProvider>
     </>
   );
 }
