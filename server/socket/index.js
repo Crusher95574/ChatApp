@@ -4,8 +4,9 @@ const http = require('http');
 const getUserDetailsFromToken = require('../helpers/getUserDetailsFromToken');
 const UserModel = require('../models/userModel');
 const { ConversationModel, MessageModel } = require('../models/ConversationModel');
-const { GroupModel } = require('../models/Group')
+const { GroupModel, GroupMessageModel } = require('../models/Group')
 const getConversation = require('../helpers/getConversation');
+const getGroupdetails = require('../helpers/getGroupdetails.js')
 const client = require('../redis/redis');
 const createGroupMessage = require('../helpers/getGroupMessages.js');
 
@@ -231,6 +232,7 @@ io.on('connection', async (socket) => {
 
 
 
+
         // Group chat handlers
 
         socket.on('create-group', async (groupData) => {
@@ -257,11 +259,10 @@ io.on('connection', async (socket) => {
                 if (!currentUserId) {
                     throw new Error('Current user ID is missing');
                 }
-                // Fetch user groups
-                const userGroups = await GroupModel.find({ 'members': currentUserId })
-                    .populate('members', '-password')
-                    .populate('messages');
+                const userGroups = await getGroupdetails(currentUserId);
+
                 // Emit the user groups to the client
+
                 io?.to(currentUserId)?.emit('grps', userGroups);
             } catch (error) {
                 console.error('Error fetching groups for user:', error);
@@ -306,7 +307,6 @@ io.on('connection', async (socket) => {
 
                 group.messages.push(savedMessage._id);
                 await group.save();
-
                 // Emit an event to inform clients about the new GroupMessage
                 io.to(data?.groupId).emit('group-message', savedMessage);
 
@@ -318,6 +318,120 @@ io.on('connection', async (socket) => {
 
             } catch (error) {
                 console.error('Error creating group message:', error);
+            }
+        });
+
+        // Handle add users to group
+        socket.on('add-users-to-group', async ({ groupId, userIds }) => {
+            try {
+                // Find the group
+                const group = await GroupModel.findById(groupId);
+                if (!group) {
+                    socket.emit('error', { message: 'Group not found' });
+                    return;
+                }
+
+                // Add users to group members
+                const usersToAdd = userIds.filter(userId => !group.members.includes(userId));
+                group.members.push(...usersToAdd);
+                await group.save();
+
+                // Notify all group members about the updated group
+                const updatedGroup = await GroupModel.findById(groupId).populate('members', '-password').populate('messages');
+                io.to(groupId).emit('group-updated', updatedGroup);
+            } catch (error) {
+                console.error('Error adding users to group:', error);
+                socket.emit('error', { message: 'An error occurred while adding users to the group' });
+            }
+        });
+
+        // Handle user leaving group
+        socket.on('user-leave-group', async ({ groupId, userId }) => {
+            try {
+                // Find the group with members and messages populated
+                const group = await GroupModel.findById(groupId).populate('members', '-password').populate('messages');
+
+                if (!group) {
+                    socket.emit('error', { message: 'Group not found' });
+                    return;
+                }
+
+                // Check if the user is part of the group
+                const userIndex = group.members.findIndex(member => member._id.toString() === userId);
+
+                if (userIndex === -1) {
+                    socket.emit('error', { message: 'You are not a member of this group' });
+                    return;
+                }
+
+                // Remove the user from the group members
+                group.members.splice(userIndex, 1);
+                await group.save();
+
+                // Notify the user that they have left the group
+                socket.emit('left-group', { groupId });
+
+                // Notify all group members about the updated group
+                io.to(groupId).emit('group-updated', group);
+            } catch (error) {
+                console.error('Error leaving group:', error);
+                socket.emit('error', { message: 'An error occurred while leaving the group' });
+            }
+        });
+
+
+        socket.on('seen-group', async (data, ack) => {
+            try {
+                console.log('Received seen-group with:', data);
+
+                const { groupId, userId } = data;
+
+                // Ensure groupId and userId are provided and valid
+                if (!groupId || !userId) {
+                    throw new Error('Group ID or User ID is missing');
+                }
+
+                // Convert groupId to string if it's not already
+                const validGroupId = typeof groupId === 'string' ? groupId : groupId.toString();
+
+                // Log the validGroupId and userId to debug
+                console.log("validGroupId:", validGroupId);
+                console.log("userId:", userId);
+
+                // Find the group based on the groupId
+                const group = await GroupModel.findById(validGroupId);
+                console.log(group)
+
+                // Ensure group exists
+                if (!group) {
+                    throw new Error('Group not found');
+                }
+
+                // Check if the user is a member of the group
+                if (!group.members.includes(userId)) {
+                    throw new Error('User is not a member of the group');
+                }
+
+                // Update the seenBy field of group messages for the specified user
+                await GroupMessageModel.updateMany(
+                    { _id: { $in: group.messages }, seenBy: { $ne: userId } },
+                    { $addToSet: { seenBy: userId } }
+                );
+
+                // Emit event to notify the user that group messages have been seen
+                io.to(userId).emit('group-messages-seen', { groupId: validGroupId });
+
+                // Acknowledge the client that the operation was successful
+                if (ack) ack({ status: 'success' });
+            } catch (error) {
+                console.error('Error marking group messages as seen:', error);
+
+                // Emit an error event or acknowledge with error
+                if (ack) {
+                    ack({ status: 'error', message: error.message });
+                } else {
+                    socket.emit('error', { message: error.message });
+                }
             }
         });
 

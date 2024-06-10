@@ -41,8 +41,6 @@ const AddGroup = ({ onClose }) => {
             profilePic
         };
 
-        console.log('Creating group with data:', groupData);
-
         socketConnection.emit('create-group', groupData);
     };
 
@@ -68,7 +66,7 @@ const AddGroup = ({ onClose }) => {
     }, [socketConnection, dispatch, groups, onClose]);
 
     return (
-        <div className='fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center'>
+        <div className='fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-10'>
             <div className='bg-white p-6 rounded-lg'>
                 <div className='flex justify-between items-center mb-4'>
                     <h4 className='font-medium text-lg'>Create Group</h4>

@@ -50,7 +50,7 @@ const Home = () => {
         }
       };
     }
-  }, [dispatch, socket]);
+  }, []);
 
   const basePath = location.pathname === '/';
 

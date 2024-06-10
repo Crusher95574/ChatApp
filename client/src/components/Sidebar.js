@@ -1,27 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import { IoChatbubbleEllipses } from "react-icons/io5";
 import { FaUserPlus } from "react-icons/fa";
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useParams } from 'react-router-dom';
 import { BiLogOut } from "react-icons/bi";
 import Avatar from './Avatar';
 import { useDispatch, useSelector } from 'react-redux';
 import EditUserDetails from './EditUserDetails';
-import Divider from './Divider';
 import { FiArrowUpLeft } from "react-icons/fi";
 import SearchUser from './SearchUser';
 import { FaImage, FaVideo, FaUserGroup } from "react-icons/fa6";
-import { logout, setGroups } from '../redux/userSlice';
+import { logout } from '../redux/userSlice';
 import AddGroup from './AddGroup';
 import { useSocket } from '../context/SocketContext';
 
 const Sidebar = () => {
+    const groupId = useParams();
     const user = useSelector(state => state.user);
     const [editUserOpen, setEditUserOpen] = useState(false);
     const [allUser, setAllUser] = useState([]);
     const [openSearchUser, setOpenSearchUser] = useState(false);
     const [addGroup, setAddGroup] = useState(false);
     const socket = useSocket();
-   // const groups = useSelector(state => state.user.groups);
     const [groups, setGroup] = useState([]);
     const dispatch = useDispatch();
     const navigate = useNavigate();
@@ -30,6 +29,7 @@ const Sidebar = () => {
         if (socket) {
             socket.emit('sidebar', user._id);
 
+            // Event listener for conversation data
             socket.on('conversation', (data) => {
                 const conversationUserData = data.map((conversationUser) => {
                     if (conversationUser.sender._id === conversationUser.receiver._id) {
@@ -52,21 +52,44 @@ const Sidebar = () => {
 
                 setAllUser(conversationUserData);
             });
-            socket.emit('grp', user._id)
+
+            // Event listener for group data
+            socket.emit('grp', user._id);
 
             socket.on('grps', (data) => {
-                console.log("grps", data);
-                setGroup(data)
+                console.log(data)
+                setGroup(data);
             });
-        }
 
-        return () => {
-            if (socket) {
-                socket.off('conversation');
-                socket.off('group');
-            }
-        };
-    }, [socket, user, dispatch]);
+
+            // Listen for updates to group details
+            socket.on('group-updated', (updatedGroup) => {
+                setGroup((prevGroups) =>
+                    prevGroups.map(group => group._id === updatedGroup._id ? updatedGroup : group)
+                );
+
+            });
+
+            // Listen for group messages seen updates
+            socket.on('group-messages-seen', ({ groupId }) => {
+                setGroup((prevGroups) =>
+                    prevGroups.map(group =>
+                        group._id === groupId ? { ...group, unseenMsg: 0 } : group
+                    )
+                );
+            });
+
+
+            // Clean up event listeners on component unmount
+            return () => {
+                if (socket) {
+                    socket.off('conversation');
+                    socket.off('grps');
+                    socket.off('group-messages-seen');
+                }
+            };
+        }
+    }, [socket, user._id, dispatch]);
 
     const handleLogout = () => {
         dispatch(logout());
@@ -212,3 +235,4 @@ const Sidebar = () => {
 };
 
 export default Sidebar;
+
