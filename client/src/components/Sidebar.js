@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { IoChatbubbleEllipses } from "react-icons/io5";
 import { FaUserPlus } from "react-icons/fa";
-import { NavLink, useNavigate, useParams } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { BiLogOut } from "react-icons/bi";
 import Avatar from './Avatar';
 import { useDispatch, useSelector } from 'react-redux';
@@ -14,7 +14,6 @@ import AddGroup from './AddGroup';
 import { useSocket } from '../context/SocketContext';
 
 const Sidebar = () => {
-    const groupId = useParams();
     const user = useSelector(state => state.user);
     const [editUserOpen, setEditUserOpen] = useState(false);
     const [allUser, setAllUser] = useState([]);
@@ -28,75 +27,67 @@ const Sidebar = () => {
     useEffect(() => {
         if (socket) {
             socket.emit('sidebar', user._id);
-
-            // Event listener for conversation data
-            socket.on('conversation', (data) => {
-                const conversationUserData = data.map((conversationUser) => {
-                    if (conversationUser.sender._id === conversationUser.receiver._id) {
-                        return {
-                            ...conversationUser,
-                            userDetails: conversationUser.sender
-                        };
-                    } else if (conversationUser.receiver._id !== user._id) {
-                        return {
-                            ...conversationUser,
-                            userDetails: conversationUser.receiver
-                        };
-                    } else {
-                        return {
-                            ...conversationUser,
-                            userDetails: conversationUser.sender
-                        };
-                    }
-                });
-
-                setAllUser(conversationUserData);
-            });
-
-            // Event listener for group data
             socket.emit('grp', user._id);
 
-            socket.on('grps', (data) => {
-                console.log(data)
-                setGroup(data);
-            });
+            const handleConversation = (data) => {
+                const conversationUserData = data.map((conversationUser) => {
+                    if (conversationUser.sender._id === conversationUser.receiver._id) {
+                        return { ...conversationUser, userDetails: conversationUser.sender };
+                    } else if (conversationUser.receiver._id !== user._id) {
+                        return { ...conversationUser, userDetails: conversationUser.receiver };
+                    } else {
+                        return { ...conversationUser, userDetails: conversationUser.sender };
+                    }
+                });
+                setAllUser(conversationUserData);
+            };
 
+            const handleGroups = (data) => setGroup(data);
 
-            // Listen for updates to group details
-            socket.on('group-updated', (updatedGroup) => {
-                setGroup((prevGroups) =>
+            const handleGroupUpdated = (updatedGroup) => {
+                setGroup(prevGroups =>
                     prevGroups.map(group => group._id === updatedGroup._id ? updatedGroup : group)
                 );
+            };
 
-            });
-
-            // Listen for group messages seen updates
-            socket.on('group-messages-seen', ({ groupId }) => {
-                setGroup((prevGroups) =>
+            const handleGroupMessagesSeen = ({ groupId }) => {
+                setGroup(prevGroups =>
                     prevGroups.map(group =>
                         group._id === groupId ? { ...group, unseenMsg: 0 } : group
                     )
                 );
-            });
+            };
 
+            // Handle new group messages
+            const handleNewGroupMessage = ({ groupId, lastMsg }) => {
+                setGroup(prevGroups =>
+                    prevGroups.map(group =>
+                        group._id === groupId ? { ...group, lastMsg, unseenMsg: (group.unseenMsg || 0) + 1 } : group
+                    )
+                );
+            };
 
-            // Clean up event listeners on component unmount
+            socket.on('conversation', handleConversation);
+            socket.on('grps', handleGroups);
+            socket.on('group-updated', handleGroupUpdated);
+            socket.on('group-messages-seen', handleGroupMessagesSeen);
+            socket.on('new-group-message', handleNewGroupMessage);  // Listen for new group messages
+
             return () => {
-                if (socket) {
-                    socket.off('conversation');
-                    socket.off('grps');
-                    socket.off('group-messages-seen');
-                }
+                socket.off('conversation', handleConversation);
+                socket.off('grps', handleGroups);
+                socket.off('group-updated', handleGroupUpdated);
+                socket.off('group-messages-seen', handleGroupMessagesSeen);
+                socket.off('new-group-message', handleNewGroupMessage);  // Cleanup
             };
         }
-    }, [socket, user._id, dispatch]);
+    }, [socket, user._id]);
 
     const handleLogout = () => {
         dispatch(logout());
         navigate("/email");
         localStorage.clear();
     };
-
     return (
         <div className='w-full h-full grid grid-cols-[48px,1fr] bg-white'>
             <div className='bg-slate-100 w-12 h-full rounded-tr-lg rounded-br-lg py-5 text-slate-600 flex flex-col justify-between'>

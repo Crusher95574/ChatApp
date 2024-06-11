@@ -264,6 +264,7 @@ io.on('connection', async (socket) => {
                 // Emit the user groups to the client
 
                 io?.to(currentUserId)?.emit('grps', userGroups);
+                
             } catch (error) {
                 console.error('Error fetching groups for user:', error);
             }
@@ -309,6 +310,17 @@ io.on('connection', async (socket) => {
                 await group.save();
                 // Emit an event to inform clients about the new GroupMessage
                 io.to(data?.groupId).emit('group-message', savedMessage);
+
+                // Emit an event to update unseen message count for each member
+                group.members.forEach(member => {
+                    if (member._id.toString() !== data.sender.toString()) {
+                        io.to(member._id.toString()).emit('new-group-message', {
+                            groupId: data.groupId,
+                            lastMsg: savedMessage
+                        });
+                    }
+                });
+
 
                 const groupCacheKey = `group-details:${data.groupId}`;
                 await client.del(groupCacheKey);
@@ -382,7 +394,7 @@ io.on('connection', async (socket) => {
 
         socket.on('seen-group', async (data, ack) => {
             try {
-                console.log('Received seen-group with:', data);
+                // console.log('Received seen-group with:', data);
 
                 const { groupId, userId } = data;
 
@@ -395,12 +407,12 @@ io.on('connection', async (socket) => {
                 const validGroupId = typeof groupId === 'string' ? groupId : groupId.toString();
 
                 // Log the validGroupId and userId to debug
-                console.log("validGroupId:", validGroupId);
-                console.log("userId:", userId);
+                // console.log("validGroupId:", validGroupId);
+                // console.log("userId:", userId);
 
                 // Find the group based on the groupId
                 const group = await GroupModel.findById(validGroupId);
-                console.log(group)
+                // console.log(group)
 
                 // Ensure group exists
                 if (!group) {

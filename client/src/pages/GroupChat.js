@@ -71,7 +71,7 @@ const GroupChat = () => {
             socket.on('left-group', handleLeftGroup);
             socket.on('group-updated', handleGroupUpdated);
 
-          
+
             socket.emit('seen-group', { groupId, userId: user._id });
 
             return () => {
