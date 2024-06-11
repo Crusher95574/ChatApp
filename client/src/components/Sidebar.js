@@ -59,13 +59,21 @@ const Sidebar = () => {
             };
 
             // Handle new group messages
-            const handleNewGroupMessage = ({ groupId, lastMsg }) => {
+            const handleNewGroupMessage = ({ groupId, lastMsg, memberId }) => {
+
                 setGroup(prevGroups =>
                     prevGroups.map(group =>
-                        group._id === groupId ? { ...group, lastMsg, unseenMsg: (group.unseenMsg || 0) + 1 } : group
+                        group._id === groupId
+                            ? {
+                                ...group,
+                                lastMsg,
+                                unseenMsg: memberId === user._id ? group.unseenMsg : (group.unseenMsg || 0) + 1
+                            }
+                            : group
                     )
                 );
             };
+
 
             socket.on('conversation', handleConversation);
             socket.on('grps', handleGroups);

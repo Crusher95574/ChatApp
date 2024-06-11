@@ -235,6 +235,12 @@ io.on('connection', async (socket) => {
 
         // Group chat handlers
 
+        const updateUserGroupsCache = async (userId) => {
+            const cacheKey = `user-groups:${userId}`;
+            const userGroups = await getGroupdetails(userId)
+            await client.set(cacheKey, JSON.stringify(userGroups), 'EX', 86400); // Cache for 24 hours
+        };
+
         socket.on('create-group', async (groupData) => {
             try {
                 const group = new GroupModel({
@@ -245,9 +251,15 @@ io.on('connection', async (socket) => {
 
                 const savedGroup = await group.save();
 
+                // Cache the newly created group in Redis
+                const groupCacheKey = `group-details:${savedGroup._id}`;
+                await client.set(groupCacheKey, JSON.stringify(savedGroup), 'EX', 86400); // Cache for 24 hours
+
+                // Update the user groups cache for each member
+                await Promise.all(groupData.members.map(memberId => updateUserGroupsCache(memberId)));
+
                 // Emit a 'group-created' event to inform connected clients about the new group
                 io.emit('group-created', savedGroup);
-
 
             } catch (error) {
                 console.error('Error creating group:', error);
@@ -259,12 +271,24 @@ io.on('connection', async (socket) => {
                 if (!currentUserId) {
                     throw new Error('Current user ID is missing');
                 }
-                const userGroups = await getGroupdetails(currentUserId);
+
+                const cacheKey = `user-groups:${currentUserId}`;
+                let userGroups = await client.get(cacheKey);
+
+                if (userGroups) {
+                    userGroups = JSON.parse(userGroups);
+                } else {
+                    userGroups = await getGroupdetails(currentUserId)
+
+                    // Cache the fetched user groups in Redis
+                    if (userGroups) {
+                        await client.set(cacheKey, JSON.stringify(userGroups), 'EX', 86400); // Cache for 24 hours
+                    }
+                }
 
                 // Emit the user groups to the client
-
                 io?.to(currentUserId)?.emit('grps', userGroups);
-                
+
             } catch (error) {
                 console.error('Error fetching groups for user:', error);
             }
@@ -285,10 +309,8 @@ io.on('connection', async (socket) => {
             socket.emit('group-details', groupDetails);
         });
 
-
         socket.on('new group message', async (data) => {
             try {
-
                 if (!data.groupId || !data.sender) {
                     throw new Error('groupId and sender are required');
                 }
@@ -308,94 +330,106 @@ io.on('connection', async (socket) => {
 
                 group.messages.push(savedMessage._id);
                 await group.save();
-                // Emit an event to inform clients about the new GroupMessage
-                io.to(data?.groupId).emit('group-message', savedMessage);
 
-                // Emit an event to update unseen message count for each member
+                io.to(data.groupId).emit('group-message', savedMessage);
+
                 group.members.forEach(member => {
-                    if (member._id.toString() !== data.sender.toString()) {
-                        io.to(member._id.toString()).emit('new-group-message', {
-                            groupId: data.groupId,
-                            lastMsg: savedMessage
-                        });
-                    }
+                    // if (member._id.toString() !== data.sender.toString()) {
+                    io.to(member._id.toString()).emit('new-group-message', {
+                        groupId: data.groupId,
+                        lastMsg: savedMessage,
+                        memberId: data.sender
+                    });
+                    //}
                 });
 
-
                 const groupCacheKey = `group-details:${data.groupId}`;
-                await client.del(groupCacheKey);
+                let groupDetails = await client.get(groupCacheKey);
 
-                const updatedGroupDetails = await GroupModel.findById(data.groupId).populate('members', '-password').populate('messages');
-                await client.set(groupCacheKey, JSON.stringify(updatedGroupDetails), 'EX', 86400);
+                if (groupDetails) {
+                    groupDetails = JSON.parse(groupDetails);
+                    groupDetails.messages.push(savedMessage); // Add the new message to the cache
+                    await client.set(groupCacheKey, JSON.stringify(groupDetails), 'EX', 86400); // Update the cache
+                } else {
+                    const updatedGroupDetails = await GroupModel.findById(data.groupId).populate('members', '-password').populate('messages');
+                    await client.set(groupCacheKey, JSON.stringify(updatedGroupDetails), 'EX', 86400); // Create the cache if it doesn't exist
+                }
+
+                // Update the user-groups cache for each member
+                const memberUpdatePromises = group.members.map(async member => {
+                    const userGroupsCacheKey = `user-groups:${member._id.toString()}`;
+                    const userGroups = await getGroupdetails(member._id.toString());
+                    await client.set(userGroupsCacheKey, JSON.stringify(userGroups), 'EX', 86400);
+                });
+                await Promise.all(memberUpdatePromises);
 
             } catch (error) {
                 console.error('Error creating group message:', error);
             }
         });
 
-        // Handle add users to group
+
         socket.on('add-users-to-group', async ({ groupId, userIds }) => {
             try {
-                // Find the group
                 const group = await GroupModel.findById(groupId);
                 if (!group) {
                     socket.emit('error', { message: 'Group not found' });
                     return;
                 }
 
-                // Add users to group members
                 const usersToAdd = userIds.filter(userId => !group.members.includes(userId));
                 group.members.push(...usersToAdd);
                 await group.save();
 
-                // Notify all group members about the updated group
                 const updatedGroup = await GroupModel.findById(groupId).populate('members', '-password').populate('messages');
                 io.to(groupId).emit('group-updated', updatedGroup);
+
+                const groupCacheKey = `group-details:${groupId}`;
+                await client.set(groupCacheKey, JSON.stringify(updatedGroup), 'EX', 86400);
+
+                // Update the user groups cache for each added member
+                await Promise.all(usersToAdd.map(memberId => updateUserGroupsCache(memberId)));
+
             } catch (error) {
                 console.error('Error adding users to group:', error);
                 socket.emit('error', { message: 'An error occurred while adding users to the group' });
             }
         });
 
-        // Handle user leaving group
         socket.on('user-leave-group', async ({ groupId, userId }) => {
             try {
-                // Find the group with members and messages populated
                 const group = await GroupModel.findById(groupId).populate('members', '-password').populate('messages');
-
                 if (!group) {
                     socket.emit('error', { message: 'Group not found' });
                     return;
                 }
 
-                // Check if the user is part of the group
                 const userIndex = group.members.findIndex(member => member._id.toString() === userId);
-
                 if (userIndex === -1) {
                     socket.emit('error', { message: 'You are not a member of this group' });
                     return;
                 }
 
-                // Remove the user from the group members
                 group.members.splice(userIndex, 1);
                 await group.save();
 
-                // Notify the user that they have left the group
                 socket.emit('left-group', { groupId });
-
-                // Notify all group members about the updated group
                 io.to(groupId).emit('group-updated', group);
+
+                const groupCacheKey = `group-details:${groupId}`;
+                await client.set(groupCacheKey, JSON.stringify(group), 'EX', 86400);
+
+                // Update the user groups cache for the user who left
+                await updateUserGroupsCache(userId);
+
             } catch (error) {
                 console.error('Error leaving group:', error);
                 socket.emit('error', { message: 'An error occurred while leaving the group' });
             }
         });
 
-
         socket.on('seen-group', async (data, ack) => {
             try {
-                // console.log('Received seen-group with:', data);
-
                 const { groupId, userId } = data;
 
                 // Ensure groupId and userId are provided and valid
@@ -406,13 +440,8 @@ io.on('connection', async (socket) => {
                 // Convert groupId to string if it's not already
                 const validGroupId = typeof groupId === 'string' ? groupId : groupId.toString();
 
-                // Log the validGroupId and userId to debug
-                // console.log("validGroupId:", validGroupId);
-                // console.log("userId:", userId);
-
                 // Find the group based on the groupId
                 const group = await GroupModel.findById(validGroupId);
-                // console.log(group)
 
                 // Ensure group exists
                 if (!group) {
@@ -430,6 +459,22 @@ io.on('connection', async (socket) => {
                     { $addToSet: { seenBy: userId } }
                 );
 
+                // Update Redis cache for the group messages
+                const groupCacheKey = `group-details:${validGroupId}`;
+                const groupDetails = await client.get(groupCacheKey);
+
+                if (groupDetails) {
+                    const parsedGroupDetails = JSON.parse(groupDetails);
+                    parsedGroupDetails.messages = parsedGroupDetails.messages.map(message => {
+                        if (!message.seenBy.includes(userId)) {
+                            message.seenBy.push(userId);
+                        }
+                        return message;
+                    });
+
+                    await client.set(groupCacheKey, JSON.stringify(parsedGroupDetails), 'EX', 86400);
+                }
+
                 // Emit event to notify the user that group messages have been seen
                 io.to(userId).emit('group-messages-seen', { groupId: validGroupId });
 
@@ -446,6 +491,8 @@ io.on('connection', async (socket) => {
                 }
             }
         });
+
+
 
 
         socket.on('join-group', async (groupId) => {
